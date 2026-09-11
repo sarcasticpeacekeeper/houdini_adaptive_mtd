@@ -1,0 +1,29 @@
+---
+# Adaptive MTD Lab — Ansible inventory
+# Run: ansible-playbook -i ansible/inventory.yml ansible/site.yml
+
+all:
+  vars:
+    ansible_user: maverick
+    ansible_ssh_private_key_file: ~/.ssh/mtd_lab_key
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+  children:
+    # VMs reachable directly from the Windows host (on VMnet2 / WAN)
+    wan:
+      hosts:
+        attacker:
+          ansible_host: 203.0.113.50
+        sensor:
+          ansible_host: 203.0.113.2
+
+    # VMs on the DMZ (VMnet3) — reached via the sensor as a jump host
+    dmz:
+      vars:
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -J maverick@203.0.113.2"
+      hosts:
+        server:
+          ansible_host: 172.16.10.10
+        honeypot:
+          ansible_host: 172.16.10.20

@@ -1,0 +1,42 @@
+---
+# Attacker role — install the attack tools and deploy run_attack.py.
+# Kali ships with most tools; we just verify and fill any gaps.
+
+- name: Install / verify attack tools
+  apt:
+    name:
+      - nmap
+      - hydra
+      - sqlmap
+      - curl
+      - python3
+    state: present
+    update_cache: true
+
+- name: Create attacker deploy directory
+  file:
+    path: "{{ mtd_attacker_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Deploy run_attack.py
+  copy:
+    src: run_attack.py
+    dest: "{{ mtd_attacker_dir }}/run_attack.py"
+    mode: "0755"
+
+- name: Deploy the small wordlists for the brute-force phase
+  copy:
+    src: users.txt
+    dest: "{{ mtd_attacker_dir }}/users.txt"
+    mode: "0644"
+
+- name: Deploy password wordlist
+  copy:
+    src: pass.txt
+    dest: "{{ mtd_attacker_dir }}/pass.txt"
+    mode: "0644"
+
+- name: Print usage hint
+  debug:
+    msg: "Attacker ready. Run: python3 {{ mtd_attacker_dir }}/run_attack.py --phase all"

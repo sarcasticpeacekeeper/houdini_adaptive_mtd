@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Adaptive MTD Dashboard</title>
+  <meta http-equiv="refresh" content="3">
+  <style>
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; background: #0d1117; color: #c9d1d9; }
+    h1 { color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+    h2 { color: #79c0ff; margin-top: 32px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 16px 0; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; }
+    .card .label { color: #8b949e; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+    .on  { color: #3fb950; }
+    .off { color: #f85149; }
+    .warn { color: #d29922; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border: 1px solid #30363d; padding: 8px; text-align: left; }
+    th { background: #21262d; color: #c9d1d9; }
+    tr:nth-child(even) { background: #161b22; }
+    .toggle-form { display: inline; }
+    button { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    button.danger { background: #da3633; }
+    button:hover { filter: brightness(1.1); }
+    .small { color: #8b949e; font-size: 12px; }
+    .meter { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+    .meter > div { height: 100%; background: linear-gradient(90deg, #3fb950, #d29922, #f85149); transition: width 0.5s; }
+  </style>
+</head>
+<body>
+  <h1>Adaptive MTD Dashboard</h1>
+  <p class="small">Auto-refreshes every 3s. Served on the sensor at port 43123.</p>
+
+  <h2>Current Surface</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="label">MTD Status</div>
+      <div class="value {% if state.mtd_enabled %}on{% else %}off{% endif %}">
+        {% if state.mtd_enabled %}ON{% else %}OFF{% endif %}
+      </div>
+      <form class="toggle-form" method="post" action="/api/toggle">
+        {% if state.mtd_enabled %}
+          <input type="hidden" name="enabled" value="false">
+          <button type="submit" class="danger">Disable MTD</button>
+        {% else %}
+          <input type="hidden" name="enabled" value="true">
+          <button type="submit">Enable MTD</button>
+        {% endif %}
+      </form>
+      <form class="toggle-form" method="post" action="/api/reset" style="margin-left:8px">
+        <button type="submit" class="danger">Reset</button>
+      </form>
+    </div>
+    <div class="card">
+      <div class="label">Current VIP</div>
+      <div class="value">{{ state.current_vip or '—' }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Public SSH Port</div>
+      <div class="value">{{ state.current_ssh_port or '—' }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Public HTTPS Port</div>
+      <div class="value">{{ state.current_https_port or '—' }}</div>
+    </div>
+  </div>
+
+  <h2>Adaptive Policy</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="label">Threat Level (0–10)</div>
+      <div class="value warn">{{ state.threat_level | default(0) | int }}</div>
+      <div class="meter"><div style="width: {{ (state.threat_level or 0) * 10 }}%"></div></div>
+    </div>
+    <div class="card">
+      <div class="label">T_rot (rotation period)</div>
+      <div class="value">{{ state.t_eff | default(60) | int }} s</div>
+    </div>
+    <div class="card">
+      <div class="label">Total Rotations</div>
+      <div class="value">{{ state.rotation_count | default(0) }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Last Rotation</div>
+      <div class="value small">
+        {% if state.last_rotation %}
+          {{ state.last_rotation | int }}
+        {% else %}
+          —
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <h2>Recent Suricata Alerts</h2>
+  <p class="small">Live alerts from Suricata. Severity 1 (high) triggers attacker redirect; severity 2 (medium) bumps threat level only.</p>
+  <table>
+    <thead>
+      <tr><th>Time</th><th>Source IP</th><th>Signature</th><th>SID</th><th>Severity</th></tr>
+    </thead>
+    <tbody>
+    {% for a in alerts | reverse | list %}
+      <tr>
+        <td>{{ a.timestamp }}</td>
+        <td>{{ a.src_ip }}</td>
+        <td>{{ a.signature }}</td>
+        <td>{{ a.signature_id }}</td>
+        <td class="{% if a.severity_num == 1 %}warn{% else %}small{% endif %}">{{ a.severity }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Redirected Attackers (-> honeypot dummy site)</h2>
+  <p class="small">Source IPs flagged by Suricata high-severity alerts. Their HTTPS/SSH traffic is DNATed to the honeypot; legit clients keep going to the real server. Sticky for the rest of the demo.</p>
+  <table>
+    <thead>
+      <tr><th>Source IP</th><th>Flagged At</th><th>Trigger SID</th><th>Reason</th><th>Redirect Target</th></tr>
+    </thead>
+    <tbody>
+    {% for ip, a in attackers.items() %}
+      <tr>
+        <td>{{ ip }}</td>
+        <td>{{ a.flagged_at | int }}</td>
+        <td>{{ a.trigger_sid }}</td>
+        <td>{{ a.trigger_message }}</td>
+        <td>{{ a.redirect_target }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="small">No attackers redirected yet. Run the attack with MTD ON to see Suricata flag a source IP here.</p>
+  {% endif %}
+
+  <h2>Recent Rotations</h2>
+  {% if rotations %}
+  <table>
+    <thead>
+      <tr><th>Time</th><th>Old VIP:port</th><th>New VIP:port</th><th>Threat</th><th>T_rot</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+    {% for r in rotations | reverse | list %}
+      <tr>
+        <td>{{ r.timestamp | int }}</td>
+        <td>{{ r.old_vip }}:{{ r.old_https_port }}</td>
+        <td>{{ r.new_vip }}:{{ r.new_https_port }}</td>
+        <td>{{ r.threat_level | round(2) }}</td>
+        <td>{{ r.t_eff | int }}s</td>
+        <td>{{ r.reason }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="small">No rotations yet. {% if not state.mtd_enabled %}MTD is OFF — enable it to start rotating.{% endif %}</p>
+  {% endif %}
+
+</body>
+</html>

@@ -1,0 +1,96 @@
+# Adaptive MTD Lab — Suricata config (NFQ inline mode)
+# This is a minimal override of the stock /etc/suricata/suricata.yaml.
+# Only the sections we change are shown; the stock file is replaced wholesale
+# for simplicity in the lab. See docs/VM_SETUP.md for the narrative.
+
+%YAML 1.1
+---
+default-log-dir: /var/log/suricata/
+stats:
+  enabled: yes
+  interval: 30
+
+# Inline IPS via NFQUEUE
+nfq:
+  mode: accept
+  repeat-mark: 1
+  repeat-mask: 1
+  route-timeout: 200
+  batch-size: 20
+  fail-open: yes
+
+# Streams to track
+stream:
+  memcap: 64mb
+  midstream: true
+  async-oneside: true
+
+# App-layer
+app-layer:
+  protocols:
+    http:
+      enabled: yes
+      libhtp:
+        default-config:
+          personality: IDS
+          request-body-limit: 100kb
+          response-body-limit: 100kb
+    tls:
+      enabled: yes
+      detection-ports:
+        dp: 443
+    ssh:
+      enabled: yes
+
+# EVE JSON output (the controller tails this)
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      types:
+        - alert:
+            tagged-packets: yes
+        - http:
+            extended: yes
+        - dns
+        - tls:
+            extended: yes
+        - ssh
+  - stats:
+      enabled: yes
+      filename: stats.log
+      interval: 30
+
+# Default vars
+vars:
+  address-groups:
+    HOME_NET: "[203.0.113.0/24,172.16.10.0/24,192.168.10.0/24]"
+    EXTERNAL_NET: "!$HOME_NET"
+  port-groups:
+    HTTP_PORTS: "80,443,8443,4443,8444,4444"
+    SSH_PORTS: "22,2222,22022,20222,22002"
+
+# Rule files
+default-rule-path: /var/lib/suricata/rules
+rule-files:
+  - suricata.rules      # ET/Open, populated by suricata-update
+  - /etc/suricata/rules/mtd.rules   # lab custom rules
+
+# Logging
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: yes
+
+# Run mode
+runmode: workers
+af-packet:
+  - interface: {{ mtd_wan_iface }}
+    threads: auto
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes

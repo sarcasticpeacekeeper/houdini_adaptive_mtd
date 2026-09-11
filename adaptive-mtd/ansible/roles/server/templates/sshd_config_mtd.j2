@@ -1,0 +1,11 @@
+# Adaptive MTD Lab — sshd config snippet for the defended server.
+# Drop-in file loaded by /etc/ssh/sshd_config (Include directive).
+# Listens on every SSH port in the pool. The sensor's DNAT picks which is public.
+
+Port {{ mtd_ssh_port_pool | join(' ') }}
+
+# Allow password auth for the demo (so hydra has something to brute force)
+PasswordAuthentication yes
+
+# Allow root login attempts (so cowrie-style attacks have a target name)
+PermitRootLogin no

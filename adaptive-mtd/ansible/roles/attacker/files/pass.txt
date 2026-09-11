@@ -1,0 +1,8 @@
+maverick
+password
+123456
+admin
+root
+letmein
+welcome
+changeme

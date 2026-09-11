@@ -1,0 +1,42 @@
+# Adaptive MTD Lab — nginx config for the defended server.
+# Listens on every HTTPS port in the pool. The sensor's DNAT picks which is
+# public at any given time; the server just answers on all of them.
+# Binds to 0.0.0.0 so it answers on every VIP the server has.
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    root /var/www/mtd;
+    index index.html;
+}
+
+server {
+    {% for port in mtd_https_port_pool %}
+    listen {{ port }} ssl;
+    listen [::]: {{ port }} ssl;
+    {% endfor %}
+    server_name svc.local _;
+    root /var/www/mtd;
+    index index.html;
+
+    ssl_certificate     /etc/nginx/ssl/mtd.crt;
+    ssl_certificate_key /etc/nginx/ssl/mtd.key;
+    ssl_protocols        TLSv1.2 TLSv1.3;
+    ssl_ciphers          HIGH:!aNULL:!MD5;
+
+    # Log so the SIEM/dashboard can see web exploit attempts
+    access_log /var/log/nginx/mtd-access.log;
+    error_log  /var/log/nginx/mtd-error.log;
+
+    # A simple injectable-looking endpoint so sqlmap has something to find
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location /login {
+        # Intentionally echoes the `user` param — looks injectable to sqlmap
+        default_type text/plain;
+        return 200 "Welcome, $arg_user\n";
+    }
+}

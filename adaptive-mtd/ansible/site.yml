@@ -1,0 +1,29 @@
+---
+# Adaptive MTD Lab — top-level playbook
+# Runs all roles in order. Idempotent — safe to re-run.
+#
+#   ansible-playbook -i ansible/inventory.yml ansible/site.yml
+
+- name: Provision the Sensor (firewall + Suricata + MTD controller + dashboard)
+  hosts: sensor
+  become: true
+  roles:
+    - sensor
+
+- name: Provision the Server (nginx + sshd on the full VIP/port pool)
+  hosts: server
+  become: true
+  roles:
+    - server
+
+- name: Provision the Honeypot (Cowrie + rsyslog to sensor)
+  hosts: honeypot
+  become: true
+  roles:
+    - honeypot
+
+- name: Provision the Attacker (tools + run_attack.py)
+  hosts: attacker
+  become: true
+  roles:
+    - attacker

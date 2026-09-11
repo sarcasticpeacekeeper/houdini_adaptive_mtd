@@ -1,0 +1,230 @@
+---
+# Honeypot role — install Cowrie (SSH medium-interaction) + nginx dummy
+# website (for attacker redirection) + forward logs to the sensor.
+#
+# NEW (redesign): the honeypot now runs TWO decoys:
+#   1. Cowrie  — SSH decoy (unchanged)
+#   2. nginx   — dummy website that redirected attackers hit. Looks like the
+#               real server's login page but is fake. Logs every request.
+
+- name: Install build/runtime deps for Cowrie + nginx
+  apt:
+    name:
+      - python3
+      - python3-venv
+      - python3-dev
+      - git
+      - curl
+      - rsyslog
+      - authbind
+      - nginx
+    state: present
+    update_cache: true
+
+- name: Create cowrie user
+  user:
+    name: cowrie
+    shell: /bin/bash
+    home: /home/cowrie
+    create_home: true
+
+- name: Clone Cowrie (idempotent — skip if already present)
+  git:
+    repo: https://github.com/cowrie/cowrie.git
+    dest: /home/cowrie/cowrie
+    version: master
+    force: false
+  become: true
+  become_user: cowrie
+
+- name: Create Python venv for Cowrie
+  command: python3 -m venv venv
+  args:
+    chdir: /home/cowrie/cowrie
+    creates: /home/cowrie/cowrie/venv
+  become: true
+  become_user: cowrie
+
+- name: Install Cowrie Python deps
+  pip:
+    name: -r /home/cowrie/cowrie/requirements.txt
+    state: present
+    virtualenv: /home/cowrie/cowrie/venv
+    virtualenv_command: python3 -m venv
+  become: true
+  become_user: cowrie
+
+- name: Deploy Cowrie config (fake hostname looks like the real server)
+  copy:
+    dest: /home/cowrie/cowrie/etc/cowrie.cfg
+    mode: "0644"
+    owner: cowrie
+    group: cowrie
+    content: |
+      [shell]
+      hostname = srv-prod-01
+      log_path = /home/cowrie/cowrie/var/log/cowrie
+      download_path = /home/cowrie/cowrie/var/lib/cowrie/downloads
+      interactive = true
+
+      [ssh]
+      enabled = true
+      listen_endpoints = tcp:22:interface=0.0.0.0
+      listen_endpoints = tcp:2222:interface=0.0.0.0
+      ssh_version_string = OpenSSH_8.4p1 Debian-5+deb11u1
+
+      [telnet]
+      enabled = false
+
+      [output]
+      jsonlog = /home/cowrie/cowrie/var/log/cowrie/cowrie.json
+
+      [output_jsonlog]
+      epoch_timestamp = true
+
+- name: Allow cowrie to bind to port 22 (authbind)
+  file:
+    path: /etc/authbind/byport/22
+    state: touch
+    owner: cowrie
+    group: cowrie
+    mode: "0755"
+
+- name: Write Cowrie systemd unit
+  copy:
+    dest: /etc/systemd/system/cowrie.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Cowrie SSH Honeypot
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=cowrie
+      Group=cowrie
+      WorkingDirectory=/home/cowrie/cowrie
+      ExecStart=/home/cowrie/cowrie/venv/bin/python -m cowrie --config /home/cowrie/cowrie/etc/cowrie.cfg start
+      ExecStop=/home/cowrie/cowrie/venv/bin/python -m cowrie stop
+      Restart=on-failure
+      RestartSec=3
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: restart cowrie
+
+- name: Ensure Cowrie is enabled and running
+  service:
+    name: cowrie
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# --- NEW: nginx dummy website for redirected attackers ---
+
+- name: Create dummy web root
+  file:
+    path: /var/www/dummy
+    state: directory
+    mode: "0755"
+
+- name: Deploy the dummy login page (looks like the real server)
+  copy:
+    dest: /var/www/dummy/index.html
+    mode: "0644"
+    content: |
+      <!DOCTYPE html>
+      <html><head><title>Internal Portal — Login</title>
+      <style>body{font-family:sans-serif;background:#f5f5f5;padding:40px}
+      .box{max-width:320px;margin:auto;background:white;padding:24px;border-radius:6px;box-shadow:0 1px 3px #999}
+      input{width:100%;padding:8px;margin:6px 0;box-sizing:border-box}
+      button{width:100%;padding:10px;background:#0d6efd;color:white;border:none;border-radius:4px}
+      </style></head>
+      <body><div class="box">
+      <h2>Internal Portal</h2>
+      <form method="post" action="/login">
+      <input name="user" placeholder="username"><br>
+      <input name="pass" type="password" placeholder="password"><br>
+      <button type="submit">Sign in</button>
+      </form>
+      <p style="color:#888;font-size:12px">v2.1.4 — authorized users only</p>
+      </div></body></html>
+
+- name: Write nginx dummy site config (listens on 443 + 80)
+  copy:
+    dest: /etc/nginx/sites-available/dummy
+    mode: "0644"
+    content: |
+      server {
+          listen 80 default_server;
+          listen 443 ssl default_server;
+          server_name _;
+          root /var/www/dummy;
+          index index.html;
+          ssl_certificate     /etc/nginx/ssl/dummy.crt;
+          ssl_certificate_key /etc/nginx/ssl/dummy.key;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          access_log /var/log/nginx/dummy-access.log;
+          error_log  /var/log/nginx/dummy-error.log;
+          location / { try_files $uri $uri/ =404; }
+          location /login { return 200 "Login submitted.\n"; }
+      }
+  notify: reload nginx
+
+- name: Enable dummy site, disable default
+  file:
+    src: /etc/nginx/sites-available/dummy
+    dest: /etc/nginx/sites-enabled/dummy
+    state: link
+  notify: reload nginx
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: reload nginx
+
+- name: Create SSL dir for dummy cert
+  file:
+    path: /etc/nginx/ssl
+    state: directory
+    mode: "0755"
+
+- name: Generate self-signed cert for dummy site
+  command: >
+    openssl req -x509 -nodes -newkey rsa:2048
+    -keyout /etc/nginx/ssl/dummy.key
+    -out /etc/nginx/ssl/dummy.crt
+    -days 3650
+    -subj "/CN=svc.local/O=MTD Lab Honeypot"
+  args:
+    creates: /etc/nginx/ssl/dummy.crt
+  notify: reload nginx
+
+- name: Ensure nginx is enabled and running
+  service:
+    name: nginx
+    enabled: true
+    state: started
+
+# --- rsyslog forward (unchanged) ---
+
+- name: Configure rsyslog to ship Cowrie JSON + nginx access logs to the sensor
+  copy:
+    dest: /etc/rsyslog.d/99-cowrie-out.conf
+    mode: "0644"
+    content: |
+      # Forward cowrie JSON lines to the sensor's rsyslog on TCP 514
+      :syslogtag, isequal, "cowrie:" @@{{ mtd_honeypot_default_gateway | default('172.16.10.1') }}:514
+      & stop
+      # Also forward nginx dummy-site access logs (so the sensor sees attacker web activity)
+      :msg, contains, "dummy-access" @@{{ mtd_honeypot_default_gateway | default('172.16.10.1') }}:514
+      & stop
+  notify: restart rsyslog
+
+- name: Ensure rsyslog is enabled and running
+  service:
+    name: rsyslog
+    enabled: true
+    state: started

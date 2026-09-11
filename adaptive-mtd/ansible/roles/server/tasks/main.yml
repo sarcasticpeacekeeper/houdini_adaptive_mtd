@@ -1,0 +1,93 @@
+---
+# Server role — passive defended target.
+# Configure nginx (HTTP+HTTPS on all ports in the pool) and sshd on all SSH ports.
+# Bind all VIPs to the interface (already done via netplan, but ensure here too).
+
+- name: Install nginx + openssh-server + openssl
+  apt:
+    name:
+      - nginx
+      - openssh-server
+      - openssl
+      - python3
+    state: present
+    update_cache: true
+
+- name: Ensure all VIPs are bound to {{ mtd_server_iface }}
+  command: "ip addr add {{ item }}/24 dev {{ mtd_server_iface }}"
+  loop: "{{ mtd_vip_pool }}"
+  register: vip_add
+  failed_when: vip_add.rc != 0 and "File exists" not in vip_add.stderr
+  changed_when: vip_add.rc == 0
+
+- name: Create web root
+  file:
+    path: /var/www/mtd
+    state: directory
+    mode: "0755"
+
+- name: Deploy the static demo page
+  copy:
+    dest: /var/www/mtd/index.html
+    mode: "0644"
+    content: |
+      <!DOCTYPE html>
+      <html><head><title>MTD Lab — Defended Service</title></head>
+      <body>
+        <h1>MTD Lab — Defended Service</h1>
+        <p>This is the protected web service. If you can read this, the surface
+        is currently pointing at you.</p>
+        <p>Server: {{ ansible_hostname }} | VIPs: {{ mtd_vip_pool | join(', ') }}</p>
+      </body></html>
+
+- name: Create SSL cert directory
+  file:
+    path: /etc/nginx/ssl
+    state: directory
+    mode: "0755"
+
+- name: Generate self-signed cert (valid 10 years)
+  command: >
+    openssl req -x509 -nodes -newkey rsa:2048
+    -keyout /etc/nginx/ssl/mtd.key
+    -out /etc/nginx/ssl/mtd.crt
+    -days 3650
+    -subj "/CN=svc.local/O=MTD Lab"
+  args:
+    creates: /etc/nginx/ssl/mtd.crt
+
+- name: Write nginx site config (all HTTPS ports in pool)
+  template:
+    src: nginx-mtd.conf.j2
+    dest: /etc/nginx/sites-available/mtd
+    mode: "0644"
+  notify: reload nginx
+
+- name: Enable the MTD site, disable the default
+  file:
+    src: /etc/nginx/sites-available/mtd
+    dest: /etc/nginx/sites-enabled/mtd
+    state: link
+  notify: reload nginx
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: reload nginx
+
+- name: Configure sshd to listen on all SSH ports in pool
+  template:
+    src: sshd_config_mtd.j2
+    dest: /etc/ssh/sshd_config.d/99-mtd.conf
+    mode: "0644"
+  notify: restart sshd
+
+- name: Ensure nginx + sshd are enabled and running
+  service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - nginx
+    - ssh

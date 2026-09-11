@@ -1,0 +1,14 @@
+# Python deps for the MTD controller + dashboard (installed on the sensor).
+# The attacker VM uses only stdlib (no extra deps).
+# Ansible is run from the Windows host, not from a VM.
+
+# MTD controller (mtd_controller/)
+# Uses only stdlib + pyyaml for any YAML parsing (kept for future use).
+pyyaml>=6.0
+
+# Dashboard (dashboard/)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1
+requests>=2.31
+python-multipart>=0.0.9

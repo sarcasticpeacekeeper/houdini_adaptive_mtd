@@ -1,0 +1,29 @@
+---
+# Handlers for the sensor role
+
+- name: reload iptables
+  service:
+    name: netfilter-persistent
+    state: restarted
+
+- name: restart suricata
+  service:
+    name: suricata
+    state: restarted
+
+- name: restart rsyslog
+  service:
+    name: rsyslog
+    state: restarted
+
+- name: restart mtd-controller
+  service:
+    name: mtd-controller
+    state: restarted
+    daemon_reload: true
+
+- name: restart mtd-dashboard
+  service:
+    name: mtd-dashboard
+    state: restarted
+    daemon_reload: true

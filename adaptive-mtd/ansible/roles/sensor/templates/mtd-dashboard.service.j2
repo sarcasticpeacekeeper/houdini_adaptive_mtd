@@ -1,0 +1,19 @@
+[Unit]
+Description=Adaptive MTD Dashboard (FastAPI on port {{ mtd_dashboard_port }})
+After=network-online.target mtd-controller.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{ mtd_dashboard_dir }}
+ExecStart={{ mtd_dashboard_dir }}/venv/bin/uvicorn main:app --host {{ mtd_dashboard_host }} --port {{ mtd_dashboard_port }}
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+Environment=MTD_CONFIG_PATH={{ mtd_config_path }}
+Environment=MTD_STATE_PATH={{ mtd_state_path }}
+Environment=MTD_ROTATION_LOG={{ mtd_rotation_log }}
+
+[Install]
+WantedBy=multi-user.target

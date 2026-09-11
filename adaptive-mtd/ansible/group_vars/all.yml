@@ -1,0 +1,74 @@
+---
+# Adaptive MTD Lab — shared config (pools, timing, paths)
+# Referenced by all roles via the `mtd_*` variables.
+
+# Network segments
+mtd_wan_cidr: 203.0.113.0/24
+mtd_wan_iface: ens33          # on the sensor
+mtd_dmz_cidr: 172.16.10.0/24
+mtd_dmz_iface: ens37          # on the sensor
+mtd_lan_cidr: 192.168.10.0/24
+mtd_lan_iface: ens38          # on the sensor
+
+# Server (defended target)
+mtd_server_ip: 172.16.10.10
+mtd_server_iface: ens33
+
+# Honeypot
+mtd_honeypot_ip: 172.16.10.20
+
+# VIP pool — the public-facing IPs the sensor DNATs to. All bound to the server.
+mtd_vip_pool:
+  - 172.16.10.10
+  - 172.16.10.11
+  - 172.16.10.12
+  - 172.16.10.13
+  - 172.16.10.14
+
+# Public SSH port pool → internal port 22 on the server
+mtd_ssh_port_pool:
+  - 22
+  - 2222
+  - 22022
+  - 20222
+  - 22002
+
+# Public HTTPS port pool → internal port 443 on the server
+mtd_https_port_pool:
+  - 443
+  - 8443
+  - 4443
+  - 8444
+  - 4444
+
+# Adaptive policy
+mtd_t_base: 60          # seconds, quiet-network rotation period
+mtd_decay: 0.9          # threat_level *= decay each tick
+mtd_bump_honeypot: 2    # per Cowrie event
+mtd_bump_ids_low: 1     # per Suricata severity 3
+mtd_bump_ids_med: 1     # per Suricata severity 2
+mtd_bump_ids_high: 3    # per Suricata severity 1
+mtd_bump_wazuh: 1       # per Wazuh alert (stubbed)
+mtd_threat_cap: 10
+mtd_tick_seconds: 1     # how often the controller loop runs
+
+# Controller / dashboard paths (on the sensor)
+mtd_controller_dir: /opt/mtd-controller
+mtd_dashboard_dir: /opt/mtd-dashboard
+mtd_config_path: /etc/mtd/config.json
+mtd_state_path: /var/log/mtd/state.json
+mtd_rotation_log: /var/log/mtd/rotations.json
+mtd_timeline_log: /var/log/mtd/timeline.json
+
+# Dashboard
+mtd_dashboard_port: 43123
+mtd_dashboard_host: 0.0.0.0
+
+# Attacker
+mtd_attacker_dir: /opt/mtd-attacker
+
+# Initial surface (set at provision time, then rotated by the controller)
+mtd_initial_vip: 172.16.10.10
+mtd_initial_ssh_port: 22
+mtd_initial_https_port: 443
+mtd_initial_enabled: false   # MTD off by default for Run A

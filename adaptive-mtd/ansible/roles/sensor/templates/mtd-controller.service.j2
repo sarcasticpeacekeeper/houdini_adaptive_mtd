@@ -1,0 +1,17 @@
+[Unit]
+Description=Adaptive MTD Controller (the brain)
+After=network-online.target suricata.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{ mtd_controller_dir }}
+ExecStart={{ mtd_controller_dir }}/venv/bin/python -m mtd_controller.controller
+Restart=on-failure
+RestartSec=3
+# The controller needs iptables (root) and reads /var/log/suricata + /var/log/cowrie
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,185 @@
+---
+# Sensor role — install iptables firewall + DNAT, Suricata inline IPS,
+# the Python MTD controller, and the FastAPI dashboard.
+
+- name: Install system packages
+  apt:
+    name:
+      - iptables
+      - netfilter-persistent
+      - iptables-persistent
+      - suricata
+      - suricata-update
+      - python3
+      - python3-pip
+      - python3-venv
+      - rsyslog
+      - curl
+    state: present
+    update_cache: true
+
+- name: Ensure IP forwarding is enabled
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: true
+
+- name: Create MTD config + log directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /etc/mtd
+    - /var/log/mtd
+
+- name: Write MTD config (pools, timing, toggle)
+  copy:
+    dest: "{{ mtd_config_path }}"
+    mode: "0644"
+    content: |
+      {
+        "vip_pool": {{ mtd_vip_pool | to_json }},
+        "ssh_port_pool": {{ mtd_ssh_port_pool | to_json }},
+        "https_port_pool": {{ mtd_https_port_pool | to_json }},
+        "t_base": {{ mtd_t_base }},
+        "decay": {{ mtd_decay }},
+        "bump_honeypot": {{ mtd_bump_honeypot }},
+        "bump_ids_low": {{ mtd_bump_ids_low }},
+        "bump_ids_med": {{ mtd_bump_ids_med }},
+        "bump_ids_high": {{ mtd_bump_ids_high }},
+        "bump_wazuh": {{ mtd_bump_wazuh }},
+        "threat_cap": {{ mtd_threat_cap }},
+        "tick_seconds": {{ mtd_tick_seconds }},
+        "server_ip": "{{ mtd_server_ip }}",
+        "honeypot_ip": "{{ mtd_honeypot_ip }}",
+        "wan_iface": "{{ mtd_wan_iface }}",
+        "dmz_iface": "{{ mtd_dmz_iface }}",
+        "state_path": "{{ mtd_state_path }}",
+        "rotation_log": "{{ mtd_rotation_log }}",
+        "timeline_log": "{{ mtd_timeline_log }}",
+        "mtd_enabled": {{ mtd_initial_enabled | to_json }},
+        "current_vip": "{{ mtd_initial_vip }}",
+        "current_ssh_port": {{ mtd_initial_ssh_port }},
+        "current_https_port": {{ mtd_initial_https_port }}
+      }
+
+- name: Write baseline iptables rules (firewall + initial DNAT)
+  template:
+    src: rules.v4.j2
+    dest: /etc/iptables/rules.v4
+    mode: "0644"
+  notify: reload iptables
+
+- name: Ensure netfilter-persistent is enabled
+  service:
+    name: netfilter-persistent
+    enabled: true
+    state: started
+
+- name: Write Suricata custom rules
+  copy:
+    src: mtd.rules
+    dest: /etc/suricata/rules/mtd.rules
+    mode: "0644"
+  notify: restart suricata
+
+- name: Write Suricata config (NFQ inline mode)
+  template:
+    src: suricata.yaml.j2
+    dest: /etc/suricata/suricata.yaml
+    mode: "0644"
+  notify: restart suricata
+
+- name: Ensure suricata-update has run at least once
+  command: suricata-update
+  args:
+    creates: /var/lib/suricata/rules/suricata.rules
+
+- name: Ensure Suricata is enabled and running
+  service:
+    name: suricata
+    enabled: true
+    state: started
+
+- name: Configure rsyslog to receive Cowrie logs from the honeypot
+  copy:
+    dest: /etc/rsyslog.d/49-cowrie-in.conf
+    mode: "0644"
+    content: |
+      # Accept syslog from the honeypot on the DMZ interface, write to cowrie.json
+      $ModLoad imtcp
+      $InputTCPServerRun 514
+      $AllowedSender tcp, 172.16.10.0/24
+      :fromhost-ip, isequal, "172.16.10.20" /var/log/cowrie/cowrie.json
+      & stop
+  notify: restart rsyslog
+
+- name: Ensure cowrie log dir exists on the sensor
+  file:
+    path: /var/log/cowrie
+    state: directory
+    mode: "0755"
+
+- name: Deploy the MTD controller Python package
+  synchronize:
+    src: ../../mtd_controller/
+    dest: "{{ mtd_controller_dir }}/"
+    delete: true
+    rsync_opts: "--exclude=__pycache__ --exclude=*.pyc"
+  notify: restart mtd-controller
+
+- name: Install controller Python deps in a venv
+  pip:
+    name:
+      - pyyaml
+      - fastapi
+      - uvicorn
+      - jinja2
+    state: present
+    virtualenv: "{{ mtd_controller_dir }}/venv"
+    virtualenv_command: python3 -m venv
+
+- name: Write mtd-controller systemd unit
+  template:
+    src: mtd-controller.service.j2
+    dest: /etc/systemd/system/mtd-controller.service
+    mode: "0644"
+  notify: restart mtd-controller
+
+- name: Deploy the dashboard
+  synchronize:
+    src: ../../dashboard/
+    dest: "{{ mtd_dashboard_dir }}/"
+    delete: true
+    rsync_opts: "--exclude=__pycache__ --exclude=*.pyc --exclude=venv"
+  notify: restart mtd-dashboard
+
+- name: Install dashboard Python deps in a venv
+  pip:
+    name:
+      - fastapi
+      - uvicorn
+      - jinja2
+      - requests
+    state: present
+    virtualenv: "{{ mtd_dashboard_dir }}/venv"
+    virtualenv_command: python3 -m venv
+
+- name: Write mtd-dashboard systemd unit
+  template:
+    src: mtd-dashboard.service.j2
+    dest: /etc/systemd/system/mtd-dashboard.service
+    mode: "0644"
+  notify: restart mtd-dashboard
+
+- name: Ensure mtd-controller + mtd-dashboard are enabled and running
+  service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop:
+    - mtd-controller
+    - mtd-dashboard

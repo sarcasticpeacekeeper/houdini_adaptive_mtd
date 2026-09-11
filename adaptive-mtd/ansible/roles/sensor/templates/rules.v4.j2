@@ -1,0 +1,53 @@
+# Adaptive MTD Lab — baseline iptables rules for the sensor
+# The MTD controller rewrites the DNAT rules at runtime; this file sets the
+# baseline at provision time. Idempotent — re-running the role restores it.
+
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT ACCEPT [0:0]
+
+# Allow loopback
+-A INPUT -i lo -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+
+# Allow established/related
+-A INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# Allow SSH to the sensor itself (for management from the Windows host)
+-A INPUT -i {{ mtd_wan_iface }} -p tcp --dport 22 -s 203.0.113.0/24 -j ACCEPT
+
+# Allow ICMP for the demo
+-A INPUT -p icmp -j ACCEPT
+-A FORWARD -p icmp -j ACCEPT
+
+# Allow rsyslog from the honeypot on TCP 514 (DMZ interface only)
+-A INPUT -i {{ mtd_dmz_iface }} -p tcp --dport 514 -s {{ mtd_honeypot_ip }}/32 -j ACCEPT
+
+# Forward WAN -> DMZ via Suricata NFQUEUE (inline IPS inspection)
+-A FORWARD -i {{ mtd_wan_iface }} -o {{ mtd_dmz_iface }} -m conntrack --ctstate NEW -j NFQUEUE --queue-num 0 --queue-bypass
+# Forward DMZ -> WAN replies (already established, allowed above)
+
+# Allow sensor -> DMZ + LAN for management
+-A FORWARD -i {{ mtd_wan_iface }} -o {{ mtd_dmz_iface }} -j ACCEPT
+-A FORWARD -i {{ mtd_dmz_iface }} -o {{ mtd_wan_iface }} -j ACCEPT
+
+COMMIT
+
+*nat
+:PREROUTING ACCEPT [0:0]
+:INPUT ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:POSTROUTING ACCEPT [0:0]
+
+# MASQUERADE DMZ -> WAN (so the server/honeypot can reach the "internet" placeholder)
+-A POSTROUTING -o {{ mtd_wan_iface }} -s {{ mtd_dmz_cidr }} -j MASQUERADE
+
+# Initial DNAT — the public surface. The controller rewrites these rules at runtime.
+# HTTPS: public port {{ mtd_initial_https_port }} -> {{ mtd_initial_vip }}:443
+-A PREROUTING -i {{ mtd_wan_iface }} -p tcp --dport {{ mtd_initial_https_port }} -j DNAT --to-destination {{ mtd_initial_vip }}:443
+# SSH: public port {{ mtd_initial_ssh_port }} -> {{ mtd_initial_vip }}:22
+-A PREROUTING -i {{ mtd_wan_iface }} -p tcp --dport {{ mtd_initial_ssh_port }} -j DNAT --to-destination {{ mtd_initial_vip }}:22
+
+COMMIT
